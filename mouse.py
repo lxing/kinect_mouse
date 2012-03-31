@@ -39,26 +39,22 @@ class Mouse(object):
     kin_base = (180, 20)
     kin_dim = (320, 240)
     sys_dim = (1366, 768)
-    anchor_thresh = 120
+    anchor_thresh = 115
     click_thresh = 160
 
     def __init__(self):
         self.pm = pymouse.PyMouse()
-        self.x = 0
-        self.y = 0
+        self.x, self.y = (0, 0)
         self.anchor = None
         self.mousedown = False
 
-    def process(self, point, lh, rh):
-        w = rh[0] - lh[0]
+    def process(self, point, w):
         if w > self.click_thresh:
             if not self.mousedown:
-                print 'mousedown'
                 self.mousedown = True
                 self.pm.click(self.x, self.y)
         else:
             if self.mousedown:
-                print 'mouseup'
                 self.mousedown = False
 
         if w > self.anchor_thresh:
@@ -85,15 +81,15 @@ class Mouse(object):
 
 
 class Smoother(object):
-    maxdata = 9
-    jitter_max = 5
-    jitter_thresh = 1e5
-
-    def __init__(self):
+    def __init__(self, maxdata, jitter_thresh, jitter_max):
         self.index = 0
-        self.data = [(0,0) for _ in range(self.maxdata)]
+        self.data = [(0,0) for _ in range(maxdata)]
         self.jitter_count = 0
         self.avg = (0,0)
+
+        self.maxdata = maxdata # Number of points to interpolate
+        self.jitter_thresh = jitter_thresh # Lower bound for a point to be considered a jitter anomaly
+        self.jitter_max = jitter_max # Maximum number of jitter points to discard
 
     def jitter(self, old, new):
         """
@@ -114,13 +110,16 @@ class Smoother(object):
 
     def register(self, point):
         old = self.data[self.index]
-        if self.jitter(old, point): return
+        if self.jitter(old, point):
+            return True
 
         self.data[self.index] = point
         self.index = (self.index + 1) % self.maxdata
 
         self.avg = (self.avg[0] + (point[0] - old[0]) / float(self.maxdata),
             self.avg[1] + (point[1] - old[1]) / float(self.maxdata))
+
+        return False
 
     def average(self):
         return int(self.avg[0]), int(self.avg[1])
@@ -129,7 +128,7 @@ def compute_bounds(contour):
     contour = list(contour)
 
     tip = min(contour, key=lambda (x,y): y)
-    contour = filter(lambda (x, y): y < tip[1] + 130, contour)
+    contour = filter(lambda (x, y): y < tip[1] + 130, contour) # Filter out the arm
 
     lh = min(contour, key=lambda (x,y): x)
     rh = max(contour, key=lambda (x,y): x)
@@ -137,12 +136,15 @@ def compute_bounds(contour):
     return tip, lh, rh
 
 if __name__ == '__main__':
-    white = cv.RGB(17, 110, 255)
+    blue = cv.RGB(17, 110, 255)
+
     kin = Kinect()
-    sm = Smoother()
+    mouse_sm = Smoother(8, 1e5, 5)
+    width_sm = Smoother(3, 1e2, 8)
     mouse = Mouse()
 
-    cv.NamedWindow("Contours")
+    cv.NamedWindow("Hi")
+    small = cv.CreateImage((320, 240), 8, 3)
 
     while True:
         kin.next_frame()
@@ -151,18 +153,30 @@ if __name__ == '__main__':
 
         if contour:
             tip, lh, rh = compute_bounds(contour)
-            sm.register(tip)
-            px, py = sm.average()
+            jitter = mouse_sm.register(tip)
+            x, y = mouse_sm.average()
 
-            cv.Rectangle(video, (px, py), (px + 5, py + 5), white)
-            cv.Rectangle(video, (lh[0], tip[1]), (rh[0], tip[1] + 130), white)
-            mouse.process((px, py), lh, rh)
+            w = rh[0] - lh[0]
+            width_sm.register((w, w))
+            w, _ = width_sm.average()
+
+            anchor = mouse.anchor
+            if anchor:
+                cv.Rectangle(video, (anchor[0], anchor[1]), (anchor[0] + 5, anchor[1] + 5), blue)
+                cv.Line(video, (anchor[0] + 2, anchor[1] + 2), (x + 2, y + 2), blue)
+            cv.Rectangle(video, (x, y), (x + 5, y + 5), blue)
+            cv.Rectangle(video, (lh[0], y), (lh[0] + 5, y + 5), blue)
+            cv.Rectangle(video, (rh[0], y), (rh[0] + 5, y + 5), blue)
+            #cv.DrawContours(video, contour, blue, blue, -1)
+
+            if not jitter:
+                mouse.process((x, y), w)
 
         x, y, w, h = mouse.kinect_bounds()
-        cv.Rectangle(video, (x, y), (x + w, y + h), white)
+        cv.Rectangle(video, (x, y), (x + w, y + h), blue)
 
-        cv.DrawContours(video, contour, white, white, -1)
-        cv.ShowImage("Contours", video)
+        cv.Resize(video, small)
+        cv.ShowImage("Hi", small)
 
         if cv.WaitKey(10) == 27:
             break
