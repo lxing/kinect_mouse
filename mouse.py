@@ -1,6 +1,7 @@
 import cv
 import freenect
 import frame_convert
+import math
 
 from Xlib.display import Display
 from Xlib.ext.xtest import fake_input
@@ -59,6 +60,8 @@ class Window(object):
     def active_window(self):
         window_id = self.root.get_full_property(self.display.intern_atom('_NET_ACTIVE_WINDOW'), X.AnyPropertyType).value[0]
         window = self.display.create_resource_object('window', window_id)
+        self.resize(window, (500, 500))
+        return window
 
     def find_window(self, title):
         window_ids = self.root.get_full_property(self.display.intern_atom('_NET_CLIENT_LIST'), X.AnyPropertyType).value
@@ -80,25 +83,57 @@ class Window(object):
         geo = window.get_geometry()
         return (geo.width, geo.height)
 
+    def position(self, window):
+        geo = window.get_geometry()
+        return (geo.x, geo.y)
+
 
 class Mouse(object):
     kin_base = (180, 20)
     kin_dim = (320, 240)
+
     anchor_thresh = 115
     click_thresh = 160
+    scroll_thresh = 50
+    scroll_speed = 7.0
 
-    def __init__(self):
+    def __init__(self, wind):
         self.anchor = None
+        self.dual_anchor = None
         self.mousedown = False
-        self.display = Display()
+        self.active_window = None
 
-        geo = self.display.screen().root.get_geometry()
-        self.sys_dim = (geo.width, geo.height)
+        self.x = 0
+        self.y = 0
+        self.clickx = 0
+        self.clicky = 0
 
-    def process_dual(sel, p1, p2):
-        pass
+        self.wind = wind
+        self.sys_dim = wind.shape(wind.root)
+
+    def process_dual(self, pl, pr):
+        self.anchor = None
+
+        if self.dual_anchor == None:
+            self.dual_anchor = pr
+            self.x = self.clickx
+            self.y = self.clicky
+            self.reposition()
+        else:
+            diff = pr[1] - self.dual_anchor[1]
+            if math.fabs(diff) < self.scroll_thresh:
+                return
+            else:
+                self.dual_anchor = (self.dual_anchor[0], int(self.dual_anchor[1] + diff / self.scroll_speed))
+                if diff < 0:
+                    self.click(4)
+                else:
+                    self.click(5)
+
 
     def process(self, point, w):
+        self.dual_anchor = None
+
         # Width exceeds click_thresh => click action
         if w > self.click_thresh:
             if not self.mousedown:
@@ -124,15 +159,21 @@ class Mouse(object):
 
     def move(self, point):
         x, y = point
-        x = (x - self.kin_base[0]) / float(self.kin_dim[0]) * self.sys_dim[0]
-        y = (y - self.kin_base[1]) / float(self.kin_dim[1]) * self.sys_dim[1]
-        fake_input(self.display, X.MotionNotify, x=x, y=y)
-        self.display.sync()
+        self.x = (x - self.kin_base[0]) / float(self.kin_dim[0]) * self.sys_dim[0]
+        self.y = (y - self.kin_base[1]) / float(self.kin_dim[1]) * self.sys_dim[1]
+        self.reposition()
+
+    def reposition(self):
+        fake_input(self.wind.display, X.MotionNotify, x=self.x, y=self.y)
+        self.wind.display.sync()
 
     def click(self, button):
-        fake_input(self.display, X.ButtonPress, button)
-        fake_input(self.display, X.ButtonRelease, button)
-        self.display.sync()
+        self.clickx = self.x
+        self.clicky = self.y
+
+        fake_input(self.wind.display, X.ButtonPress, button)
+        fake_input(self.wind.display, X.ButtonRelease, button)
+        self.wind.display.sync()
 
 
 class Smoother(object):
@@ -177,6 +218,12 @@ class Smoother(object):
 
         return True
 
+    def flush(self, point):
+        self.jitter_count = 0
+        for i, _ in enumerate(self.data):
+            self.data[i] = point
+        self.avg = point
+
     def average(self):
         return int(self.avg[0]), int(self.avg[1])
 
@@ -190,63 +237,86 @@ if __name__ == '__main__':
     mouse_sm = Smoother(8, 1e5, 5) # Smoothers for input
     mouse_sm2 = Smoother(8, 1e5, 5)
     width_sm = Smoother(3, 1e2, 3) # Smoother for width
-    mouse = Mouse()
     wind = Window()
+    mouse = Mouse(wind)
 
     title = "qazwsxedcrfvtgbyhnuj"
     cv.NamedWindow(title)
     small = cv.CreateImage((320, 240), 8, 3)
     window = None
+    active = True
+    inputs = 1
 
     while True:
-        kin.next_frame()
-        video = kin.video()
-        contour = kin.find_contours()
+        if active:
+            kin.next_frame()
+            video = kin.video()
+            contour = kin.find_contours()
 
-        if contour:
-            if not contour.h_next(): # Single input
-                tip, lh, rh = kin.compute_bounds(list(contour))
-                jitter = not mouse_sm.register(tip)
-                x, y = mouse_sm.average()
+            if contour:
+                if not contour.h_next(): # Single input
+                    tip, lh, rh = kin.compute_bounds(list(contour))
+                    jitter = not mouse_sm.register(tip)
+                    x, y = mouse_sm.average()
 
-                w = rh[0] - lh[0]
-                width_sm.register((w, w))
-                w, _ = width_sm.average()
+                    w = rh[0] - lh[0]
+                    width_sm.register((w, w))
+                    w, _ = width_sm.average()
 
-                anchor = mouse.anchor
-                if anchor:
-                    draw_point(video, anchor)
-                    cv.Line(video, (anchor[0] + 2, anchor[1] + 2), (x + 2, y + 2), blue)
-                draw_point(video, (x, y))
-                draw_point(video, (lh[0], y))
-                draw_point(video, (rh[0], y))
+                    if not jitter:
+                        mouse.process((x, y), w)
+                    inputs = 1
 
-                if not jitter:
-                    mouse.process((x, y), w)
-            else: # Multiple input
-                tip = kin.compute_tip(list(contour))
-                tip2 = kin.compute_tip(list(contour.h_next()))
+                    anchor = mouse.anchor
+                    if anchor:
+                        draw_point(video, anchor)
+                        cv.Line(video, (anchor[0] + 2, anchor[1] + 2), (x + 2, y + 2), blue)
+                    draw_point(video, (x, y))
+                    draw_point(video, (lh[0], y))
+                    draw_point(video, (rh[0], y))
 
-                mouse_sm.register(tip)
-                mouse_sm2.register(tip2)
-                p1 = mouse_sm.average()
-                p2 = mouse_sm2.average()
+                    if w > 640 / 2:
+                        active = False
 
-                mouse.process_dual(p1, p2)
+                else: # Multiple input
+                    tips = (kin.compute_tip(list(contour)), kin.compute_tip(list(contour.h_next())))
+                    tipl = min(tips, key=lambda (x, y): x)
+                    tipr = max(tips, key=lambda (x, y): x)
 
-            #cv.DrawContours(video, contour, blue, blue, -1)
+                    if inputs == 1: # For drag and release scrolling, flush the buffer on each drag
+                        mouse_sm.flush(tipl)
+                        mouse_sm2.flush(tipr)
+                    else:
+                        mouse_sm.register(tipl)
+                        mouse_sm2.register(tipr)
+
+                    pl = mouse_sm.average()
+                    pr = mouse_sm2.average()
+
+                    mouse.process_dual(pl, pr)
+                    inputs = 2
+
+                    anchor = mouse.dual_anchor
+                    if anchor:
+                        draw_point(video, anchor)
+                        cv.Line(video, (anchor[0] + 2, anchor[1] + 2), (pr[0] + 2, pr[1] + 2), blue)
+                    draw_point(video, tipl)
+                    draw_point(video, tipr)
 
 
-        x, y, w, h = mouse.kin_base[0], mouse.kin_base[1], mouse.kin_dim[0], mouse.kin_dim[1]
-        cv.Rectangle(video, (x, y), (x + w, y + h), blue)
+            x, y, w, h = mouse.kin_base[0], mouse.kin_base[1], mouse.kin_dim[0], mouse.kin_dim[1]
+            cv.Rectangle(video, (x, y), (x + w, y + h), blue)
 
-        cv.Resize(video, small)
-        cv.ShowImage(title, small)
+            cv.Resize(video, small)
+            cv.ShowImage(title, small)
 
-        if window == None:
-            window = wind.find_window(title)
-            if window:
-                wind.move(window, (mouse.sys_dim[0] - 320, mouse.sys_dim[1] - 240))
+            if window == None:
+                window = wind.find_window(title)
+                if window:
+                    wind.move(window, (mouse.sys_dim[0] - 320, 0))
 
-        if cv.WaitKey(10) == 27:
+        k = cv.WaitKey(10)
+        if k == 32:
+            active = not active
+        elif k == 27: # Esc
             break
