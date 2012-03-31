@@ -2,6 +2,7 @@ import cv
 import freenect
 import frame_convert
 import pymouse
+import Xlib
 
 class Kinect(object):
     dim = (640, 480)
@@ -38,7 +39,6 @@ class Kinect(object):
 class Mouse(object):
     kin_base = (180, 20)
     kin_dim = (320, 240)
-    sys_dim = (1366, 768)
     anchor_thresh = 115
     click_thresh = 160
 
@@ -47,6 +47,9 @@ class Mouse(object):
         self.x, self.y = (0, 0)
         self.anchor = None
         self.mousedown = False
+
+        screen = Xlib.display.Display(':0').screen().root.get_geometry()
+        self.sys_dim = (screen.width, screen.height)
 
     def process(self, point, w):
         if w > self.click_thresh:
