@@ -1,8 +1,10 @@
 import cv
 import freenect
 import frame_convert
-import pymouse
-import Xlib
+
+from Xlib.display import Display
+from Xlib.ext.xtest import fake_input
+from Xlib import X
 
 class Kinect(object):
     dim = (640, 480)
@@ -13,6 +15,7 @@ class Kinect(object):
         self.raw_video = cv.CreateImage(self.dim, 8, 3)
         self.contours = cv.CreateImage(self.dim, 8, 1)
         self.thresh = 115 # Depth cutoff for detection, 0 to 255
+        self.detect_height = 130
 
     def next_frame(self):
         self.raw_depth = frame_convert.pretty_depth_cv(freenect.sync_get_depth()[0])
@@ -36,6 +39,48 @@ class Kinect(object):
         storage = cv.CreateMemStorage(0)
         return cv.FindContours(self.contours, storage, cv.CV_RETR_CCOMP, cv.CV_CHAIN_APPROX_SIMPLE)
 
+    def compute_bounds(self, contour):
+        tip = self.compute_tip(contour)
+        contour = filter(lambda (x, y): y < tip[1] + self.detect_height, contour) # Filter out arms
+
+        lh = min(contour, key=lambda (x,y): x)
+        rh = max(contour, key=lambda (x,y): x)
+
+        return tip, lh, rh
+
+    def compute_tip(self, contour):
+        return min(contour, key=lambda (x,y): y)
+
+class Window(object):
+    def __init__(self):
+        self.display = Display()
+        self.root = self.display.screen().root
+
+    def active_window(self):
+        window_id = self.root.get_full_property(self.display.intern_atom('_NET_ACTIVE_WINDOW'), X.AnyPropertyType).value[0]
+        window = self.display.create_resource_object('window', window_id)
+
+    def find_window(self, title):
+        window_ids = self.root.get_full_property(self.display.intern_atom('_NET_CLIENT_LIST'), X.AnyPropertyType).value
+        for window_id in window_ids:
+            window = self.display.create_resource_object('window', window_id)
+            if title == window.get_wm_name():
+                return window
+        return None
+
+    def resize(self, window, dim):
+        window.configure(width = dim[0], height = dim[1])
+        self.display.sync()
+
+    def move(self, window, pos):
+        window.configure(x = pos[0], y = pos[1])
+        self.display.sync()
+
+    def shape(self, window):
+        geo = window.get_geometry()
+        return (geo.width, geo.height)
+
+
 class Mouse(object):
     kin_base = (180, 20)
     kin_dim = (320, 240)
@@ -43,23 +88,27 @@ class Mouse(object):
     click_thresh = 160
 
     def __init__(self):
-        self.pm = pymouse.PyMouse()
-        self.x, self.y = (0, 0)
         self.anchor = None
         self.mousedown = False
+        self.display = Display()
 
-        screen = Xlib.display.Display(':0').screen().root.get_geometry()
-        self.sys_dim = (screen.width, screen.height)
+        geo = self.display.screen().root.get_geometry()
+        self.sys_dim = (geo.width, geo.height)
+
+    def process_dual(sel, p1, p2):
+        pass
 
     def process(self, point, w):
+        # Width exceeds click_thresh => click action
         if w > self.click_thresh:
             if not self.mousedown:
                 self.mousedown = True
-                self.pm.click(self.x, self.y)
+                self.click(1)
         else:
             if self.mousedown:
                 self.mousedown = False
 
+        # Width exceeds anchor_thresh => anchor the cursor for precision
         if w > self.anchor_thresh:
             if not self.anchor:
                 self.anchor = point
@@ -69,18 +118,21 @@ class Mouse(object):
                 self.anchor = None
             self.move(point)
 
-    def kinect_bounds(self):
-        return self.kin_base[0], self.kin_base[1], self.kin_dim[0], self.kin_dim[1]
-
     def anchor_move(self, point):
         dx, dy = point[0] - self.anchor[0], point[1] - self.anchor[1]
         self.move((self.anchor[0] + dx / 3.0, self.anchor[1] + dy / 3.0))
 
     def move(self, point):
         x, y = point
-        self.x = (x - self.kin_base[0]) / float(self.kin_dim[0]) * self.sys_dim[0]
-        self.y = (y - self.kin_base[1]) / float(self.kin_dim[1]) * self.sys_dim[1]
-        self.pm.move(self.x, self.y)
+        x = (x - self.kin_base[0]) / float(self.kin_dim[0]) * self.sys_dim[0]
+        y = (y - self.kin_base[1]) / float(self.kin_dim[1]) * self.sys_dim[1]
+        fake_input(self.display, X.MotionNotify, x=x, y=y)
+        self.display.sync()
+
+    def click(self, button):
+        fake_input(self.display, X.ButtonPress, button)
+        fake_input(self.display, X.ButtonRelease, button)
+        self.display.sync()
 
 
 class Smoother(object):
@@ -114,40 +166,37 @@ class Smoother(object):
     def register(self, point):
         old = self.data[self.index]
         if self.jitter(old, point):
-            return True
+            return False # Discard jitter
 
-        self.data[self.index] = point
+        self.data[self.index] = point # Load data into the buffer
         self.index = (self.index + 1) % self.maxdata
 
+        # Recompute the average
         self.avg = (self.avg[0] + (point[0] - old[0]) / float(self.maxdata),
             self.avg[1] + (point[1] - old[1]) / float(self.maxdata))
 
-        return False
+        return True
 
     def average(self):
         return int(self.avg[0]), int(self.avg[1])
 
-def compute_bounds(contour):
-    contour = list(contour)
+blue = cv.RGB(17, 110, 255)
 
-    tip = min(contour, key=lambda (x,y): y)
-    contour = filter(lambda (x, y): y < tip[1] + 130, contour) # Filter out the arm
-
-    lh = min(contour, key=lambda (x,y): x)
-    rh = max(contour, key=lambda (x,y): x)
-
-    return tip, lh, rh
+def draw_point(video, p):
+    cv.Rectangle(video, p, (p[0] + 5, p[1] + 5) ,blue)
 
 if __name__ == '__main__':
-    blue = cv.RGB(17, 110, 255)
-
     kin = Kinect()
-    mouse_sm = Smoother(8, 1e5, 5)
-    width_sm = Smoother(3, 1e2, 8)
+    mouse_sm = Smoother(8, 1e5, 5) # Smoothers for input
+    mouse_sm2 = Smoother(8, 1e5, 5)
+    width_sm = Smoother(3, 1e2, 3) # Smoother for width
     mouse = Mouse()
+    wind = Window()
 
-    cv.NamedWindow("Hi")
+    title = "qazwsxedcrfvtgbyhnuj"
+    cv.NamedWindow(title)
     small = cv.CreateImage((320, 240), 8, 3)
+    window = None
 
     while True:
         kin.next_frame()
@@ -155,31 +204,49 @@ if __name__ == '__main__':
         contour = kin.find_contours()
 
         if contour:
-            tip, lh, rh = compute_bounds(contour)
-            jitter = mouse_sm.register(tip)
-            x, y = mouse_sm.average()
+            if not contour.h_next(): # Single input
+                tip, lh, rh = kin.compute_bounds(list(contour))
+                jitter = not mouse_sm.register(tip)
+                x, y = mouse_sm.average()
 
-            w = rh[0] - lh[0]
-            width_sm.register((w, w))
-            w, _ = width_sm.average()
+                w = rh[0] - lh[0]
+                width_sm.register((w, w))
+                w, _ = width_sm.average()
 
-            anchor = mouse.anchor
-            if anchor:
-                cv.Rectangle(video, (anchor[0], anchor[1]), (anchor[0] + 5, anchor[1] + 5), blue)
-                cv.Line(video, (anchor[0] + 2, anchor[1] + 2), (x + 2, y + 2), blue)
-            cv.Rectangle(video, (x, y), (x + 5, y + 5), blue)
-            cv.Rectangle(video, (lh[0], y), (lh[0] + 5, y + 5), blue)
-            cv.Rectangle(video, (rh[0], y), (rh[0] + 5, y + 5), blue)
+                anchor = mouse.anchor
+                if anchor:
+                    draw_point(video, anchor)
+                    cv.Line(video, (anchor[0] + 2, anchor[1] + 2), (x + 2, y + 2), blue)
+                draw_point(video, (x, y))
+                draw_point(video, (lh[0], y))
+                draw_point(video, (rh[0], y))
+
+                if not jitter:
+                    mouse.process((x, y), w)
+            else: # Multiple input
+                tip = kin.compute_tip(list(contour))
+                tip2 = kin.compute_tip(list(contour.h_next()))
+
+                mouse_sm.register(tip)
+                mouse_sm2.register(tip2)
+                p1 = mouse_sm.average()
+                p2 = mouse_sm2.average()
+
+                mouse.process_dual(p1, p2)
+
             #cv.DrawContours(video, contour, blue, blue, -1)
 
-            if not jitter:
-                mouse.process((x, y), w)
 
-        x, y, w, h = mouse.kinect_bounds()
+        x, y, w, h = mouse.kin_base[0], mouse.kin_base[1], mouse.kin_dim[0], mouse.kin_dim[1]
         cv.Rectangle(video, (x, y), (x + w, y + h), blue)
 
         cv.Resize(video, small)
-        cv.ShowImage("Hi", small)
+        cv.ShowImage(title, small)
+
+        if window == None:
+            window = wind.find_window(title)
+            if window:
+                wind.move(window, (mouse.sys_dim[0] - 320, mouse.sys_dim[1] - 240))
 
         if cv.WaitKey(10) == 27:
             break
