@@ -11,7 +11,7 @@ class Kinect(object):
         self.raw_depth = cv.CreateImage(self.dim, 8, 1)
         self.raw_video = cv.CreateImage(self.dim, 8, 3)
         self.contours = cv.CreateImage(self.dim, 8, 1)
-        self.thresh = 120 # Depth cutoff for detection, 0 to 255
+        self.thresh = 115 # Depth cutoff for detection, 0 to 255
 
     def next_frame(self):
         self.raw_depth = frame_convert.pretty_depth_cv(freenect.sync_get_depth()[0])
@@ -36,21 +36,52 @@ class Kinect(object):
         return cv.FindContours(self.contours, storage, cv.CV_RETR_CCOMP, cv.CV_CHAIN_APPROX_SIMPLE)
 
 class Mouse(object):
-    kin_base = (80, 0)
-    kin_dim = (480, 360)
+    kin_base = (180, 20)
+    kin_dim = (320, 240)
     sys_dim = (1366, 768)
+    anchor_thresh = 120
+    click_thresh = 160
 
     def __init__(self):
         self.pm = pymouse.PyMouse()
+        self.x = 0
+        self.y = 0
+        self.anchor = None
+        self.mousedown = False
+
+    def process(self, point, lh, rh):
+        w = rh[0] - lh[0]
+        if w > self.click_thresh:
+            if not self.mousedown:
+                print 'mousedown'
+                self.mousedown = True
+                self.pm.click(self.x, self.y)
+        else:
+            if self.mousedown:
+                print 'mouseup'
+                self.mousedown = False
+
+        if w > self.anchor_thresh:
+            if not self.anchor:
+                self.anchor = point
+            self.anchor_move(point)
+        else:
+            if self.anchor:
+                self.anchor = None
+            self.move(point)
 
     def kinect_bounds(self):
         return self.kin_base[0], self.kin_base[1], self.kin_dim[0], self.kin_dim[1]
 
+    def anchor_move(self, point):
+        dx, dy = point[0] - self.anchor[0], point[1] - self.anchor[1]
+        self.move((self.anchor[0] + dx / 3.0, self.anchor[1] + dy / 3.0))
+
     def move(self, point):
         x, y = point
-        x = (x - self.kin_base[0]) / float(self.kin_dim[0]) * self.sys_dim[0]
-        y = (y - self.kin_base[1]) / float(self.kin_dim[1]) * self.sys_dim[1]
-        self.pm.move(x,y)
+        self.x = (x - self.kin_base[0]) / float(self.kin_dim[0]) * self.sys_dim[0]
+        self.y = (y - self.kin_base[1]) / float(self.kin_dim[1]) * self.sys_dim[1]
+        self.pm.move(self.x, self.y)
 
 
 class Smoother(object):
@@ -98,7 +129,7 @@ def compute_bounds(contour):
     contour = list(contour)
 
     tip = min(contour, key=lambda (x,y): y)
-    contour = filter(lambda (x, y): y < tip[1] + 150, contour)
+    contour = filter(lambda (x, y): y < tip[1] + 130, contour)
 
     lh = min(contour, key=lambda (x,y): x)
     rh = max(contour, key=lambda (x,y): x)
@@ -122,9 +153,10 @@ if __name__ == '__main__':
             tip, lh, rh = compute_bounds(contour)
             sm.register(tip)
             px, py = sm.average()
+
             cv.Rectangle(video, (px, py), (px + 5, py + 5), white)
-            cv.Rectangle(video, (lh[0], tip[1]), (rh[0], tip[1] + 150), white)
-            mouse.move((px, py))
+            cv.Rectangle(video, (lh[0], tip[1]), (rh[0], tip[1] + 130), white)
+            mouse.process((px, py), lh, rh)
 
         x, y, w, h = mouse.kinect_bounds()
         cv.Rectangle(video, (x, y), (x + w, y + h), white)

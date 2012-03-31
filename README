@@ -1,0 +1,4 @@
+Requires PyMouse, OpenCV, Freenect, Xlib.
+Use vertical pointer finger to navigate.
+Extend pinky for enhanced precision.
+Extend pinky and thumb to click.
