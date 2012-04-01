@@ -95,13 +95,13 @@ class Mouse(object):
     anchor_speed = 3.0 # Anchored move zoom scale
     click_thresh = 160 # Width threshold for clicking
 
-    scroll_thresh = 40 # Height threshold for scrolling
+    scroll_thresh = 35 # Height threshold for scrolling
     scroll_speed = 7.0 # Inverse of rate at which scroll anchor catches up
 
-    grab_thresh = 250 # Distance threshold for grabbing a window
+    grab_thresh = 300 # Distance threshold for grabbing a window
     drag_thresh = 40 # Distance threshold for dragging a window around
-    drag_speed = 7.0 # Inverse of rate at which drag anchor catches up
-    drag_scale = 0.8 # Scale to translate kinect drag actions into onscreen pixels
+    drag_speed = 12.0 # Inverse of rate at which drag anchor catches up
+    drag_scale = 0.4 # Scale to translate kinect drag actions into onscreen pixels
 
     def __init__(self, wind):
         self.anchor = None
@@ -123,23 +123,22 @@ class Mouse(object):
     def process_dual(self, pl, pr):
         self.anchor = None
         self.mousedown = True
-        avg = ((pl[0] + pr[0])/2, (pl[1] + pr[1]) / 2)
 
         if self.dual_anchor == None:
             d = self.dist(pl, pr)
             active_window = wind.active_window()
+            self.dual_anchor = pr
             if d < self.grab_thresh and wind.shape(active_window)[0] != self.sys_dim[0]: # Window operations
                 self.active_window = active_window
-                self.dual_anchor = avg
             else: # Scrolling
                 self.dual_anchor = pr
                 self.x, self.y = self.clickx, self.clicky # Center scrolling on the last clicked spot
                 self.reposition()
         else:
             if self.active_window: # Window operations
-                d = self.dist(self.dual_anchor, avg)
+                d = self.dist(self.dual_anchor, pr)
                 if d > self.drag_thresh:
-                    dx, dy = avg[0] - self.dual_anchor[0], avg[1] - self.dual_anchor[1]
+                    dx, dy = pr[0] - self.dual_anchor[0], pr[1] - self.dual_anchor[1]
                     self.dual_anchor = (int(self.dual_anchor[0] + dx / self.drag_speed), int(self.dual_anchor[1] + dy / self.drag_speed))
                     x, y = self.wind.position(self.active_window)
                     self.wind.move(self.active_window, (x + self.drag_scale * dx, y + self.drag_scale * dy))
