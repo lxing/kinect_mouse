@@ -57,10 +57,6 @@ class Window(object):
         self.display = Display()
         self.root = self.display.screen().root
 
-    def refresh(self):
-        self.display = Display()
-        self.root = self.display.screen().root
-
     def active_window(self):
         window_id = self.root.get_full_property(self.display.intern_atom('_NET_ACTIVE_WINDOW'), X.AnyPropertyType).value[0]
         window = self.display.create_resource_object('window', window_id)
@@ -83,9 +79,8 @@ class Window(object):
         self.display.sync()
 
     def destroy(self, window):
-        window.destroy
+        window.destroy()
         self.display.sync()
-        self.refresh()
 
     def shape(self, window):
         geo = window.get_geometry()
@@ -139,8 +134,9 @@ class Mouse(object):
             self.destroyable = self.dist(pl, pr) < self.destroy_thresh * 2 / 3 # Make gesture destroy difficult; must drag and expand
             self.active_window = self.wind.active_window()
             self.dual_anchor = pr
+
             if self.wind.shape(self.active_window)[0] != self.sys_dim[0]: # Skip maximized windows windows
-                if self.dist(pl, pr) < self.grab_thresh: # Movement
+                if self.dist(pl, pr) < self.grab_thresh: # Grab the window if the points are close enough
                     self.dual_mode = 'move'
             else: # Scrolling
                 self.x, self.y = self.clickx, self.clicky # Center scrolling on the last clicked spot
@@ -162,9 +158,12 @@ class Mouse(object):
                     else:
                         self.click(5)
 
-        if self.destroyable and self.dist(pl, pr) > self.destroy_thresh:
+        if self.destroyable and self.dist(pl, pr) > self.destroy_thresh and pr[1] > self.sys_dim[1] / 2:
+            self.wind.destroy(self.active_window)
             self.active_window = self.wind.active_window()
+            self.dual_mode = 'scroll'
             self.destroyable = False
+            cv.WaitKey(500)
 
     def process(self, point, w):
         self.dual_anchor = None
