@@ -8,7 +8,7 @@ from Xlib.ext.xtest import fake_input
 from Xlib import X
 
 class Kinect(object):
-    dim = (640, 480)
+    dim = (640, 480) # Dimensions of the video feed
 
     def __init__(self):
         super(Kinect, self).__init__()
@@ -60,7 +60,6 @@ class Window(object):
     def active_window(self):
         window_id = self.root.get_full_property(self.display.intern_atom('_NET_ACTIVE_WINDOW'), X.AnyPropertyType).value[0]
         window = self.display.create_resource_object('window', window_id)
-        self.resize(window, (500, 500))
         return window
 
     def find_window(self, title):
@@ -84,18 +83,25 @@ class Window(object):
         return (geo.width, geo.height)
 
     def position(self, window):
-        geo = window.get_geometry()
-        return (geo.x, geo.y)
+        p = window.query_pointer()
+        return (p.root_x - p.win_x, p.root_y - p.win_y - 28) # The 28 seems to be the taskbar
 
 
 class Mouse(object):
-    kin_base = (180, 20)
-    kin_dim = (320, 240)
+    kin_base = (180, 20) # U-right corner of the detection window
+    kin_dim = (320, 240) # Dimensions of the detection window
 
-    anchor_thresh = 115
-    click_thresh = 160
-    scroll_thresh = 50
-    scroll_speed = 7.0
+    anchor_thresh = 115 # Width threshold for anchoring
+    anchor_speed = 3.0 # Anchored move zoom scale
+    click_thresh = 160 # Width threshold for clicking
+
+    scroll_thresh = 40 # Height threshold for scrolling
+    scroll_speed = 7.0 # Inverse of rate at which scroll anchor catches up
+
+    grab_thresh = 250 # Distance threshold for grabbing a window
+    drag_thresh = 40 # Distance threshold for dragging a window around
+    drag_speed = 7.0 # Inverse of rate at which drag anchor catches up
+    drag_scale = 0.8 # Scale to translate kinect drag actions into onscreen pixels
 
     def __init__(self, wind):
         self.anchor = None
@@ -111,30 +117,46 @@ class Mouse(object):
         self.wind = wind
         self.sys_dim = wind.shape(wind.root)
 
+    def dist(self, a, b):
+        return math.sqrt((a[0] - b[0])**2 + (a[1] - b[1])**2)
+
     def process_dual(self, pl, pr):
         self.anchor = None
+        self.mousedown = True
+        avg = ((pl[0] + pr[0])/2, (pl[1] + pr[1]) / 2)
 
         if self.dual_anchor == None:
-            self.dual_anchor = pr
-            self.x = self.clickx
-            self.y = self.clicky
-            self.reposition()
+            d = self.dist(pl, pr)
+            active_window = wind.active_window()
+            if d < self.grab_thresh and wind.shape(active_window)[0] != self.sys_dim[0]: # Window operations
+                self.active_window = active_window
+                self.dual_anchor = avg
+            else: # Scrolling
+                self.dual_anchor = pr
+                self.x, self.y = self.clickx, self.clicky # Center scrolling on the last clicked spot
+                self.reposition()
         else:
-            diff = pr[1] - self.dual_anchor[1]
-            if math.fabs(diff) < self.scroll_thresh:
-                return
-            else:
-                self.dual_anchor = (self.dual_anchor[0], int(self.dual_anchor[1] + diff / self.scroll_speed))
-                if diff < 0:
-                    self.click(4)
-                else:
-                    self.click(5)
+            if self.active_window: # Window operations
+                d = self.dist(self.dual_anchor, avg)
+                if d > self.drag_thresh:
+                    dx, dy = avg[0] - self.dual_anchor[0], avg[1] - self.dual_anchor[1]
+                    self.dual_anchor = (int(self.dual_anchor[0] + dx / self.drag_speed), int(self.dual_anchor[1] + dy / self.drag_speed))
+                    x, y = self.wind.position(self.active_window)
+                    self.wind.move(self.active_window, (x + self.drag_scale * dx, y + self.drag_scale * dy))
+            else: # Scrolling
+                diff = pr[1] - self.dual_anchor[1]
+                if math.fabs(diff) > self.scroll_thresh:
+                    self.dual_anchor = (self.dual_anchor[0], int(self.dual_anchor[1] + diff / self.scroll_speed))
+                    if diff < 0:
+                        self.click(4)
+                    else:
+                        self.click(5)
 
 
     def process(self, point, w):
         self.dual_anchor = None
+        self.active_window = None
 
-        # Width exceeds click_thresh => click action
         if w > self.click_thresh:
             if not self.mousedown:
                 self.mousedown = True
@@ -143,7 +165,6 @@ class Mouse(object):
             if self.mousedown:
                 self.mousedown = False
 
-        # Width exceeds anchor_thresh => anchor the cursor for precision
         if w > self.anchor_thresh:
             if not self.anchor:
                 self.anchor = point
@@ -155,7 +176,7 @@ class Mouse(object):
 
     def anchor_move(self, point):
         dx, dy = point[0] - self.anchor[0], point[1] - self.anchor[1]
-        self.move((self.anchor[0] + dx / 3.0, self.anchor[1] + dy / 3.0))
+        self.move((self.anchor[0] + dx / self.anchor_speed, self.anchor[1] + dy / self.anchor_speed))
 
     def move(self, point):
         x, y = point
@@ -248,11 +269,18 @@ if __name__ == '__main__':
     inputs = 1
 
     while True:
-        if active:
-            kin.next_frame()
-            video = kin.video()
-            contour = kin.find_contours()
+        kin.next_frame()
+        video = kin.video()
+        contour = kin.find_contours()
 
+        if not active:
+            if contour:
+                _, _, w, _ = cv.BoundingRect(contour)
+                if w > Kinect.dim[0] / 2:
+                    cv.WaitKey(1000)
+                    mouse.mousedown = True
+                    active = True
+        else:
             if contour:
                 if not contour.h_next(): # Single input
                     tip, lh, rh = kin.compute_bounds(list(contour))
@@ -275,7 +303,8 @@ if __name__ == '__main__':
                     draw_point(video, (lh[0], y))
                     draw_point(video, (rh[0], y))
 
-                    if w > 640 / 2:
+                    _, _, _, h = cv.BoundingRect(contour)
+                    if h > Kinect.dim[1] * 5 / 6:
                         active = False
 
                 else: # Multiple input
