@@ -56,6 +56,8 @@ class Window(object):
     def __init__(self):
         self.display = Display()
         self.root = self.display.screen().root
+        self.title = 'Pointer mode'
+        self.video = None
 
     def active_window(self):
         window_id = self.root.get_full_property(self.display.intern_atom('_NET_ACTIVE_WINDOW'), X.AnyPropertyType).value[0]
@@ -105,7 +107,7 @@ class Mouse(object):
     grab_thresh = 300 # Distance threshold for grabbing a window
     drag_thresh = 40 # Distance threshold for dragging a window around
     drag_speed = 12.0 # Inverse of rate at which drag anchor catches up
-    drag_scale = 0.4 # Scale to translate kinect drag actions into onscreen pixels
+    drag_scale = (0.4, 0.2) # Scale to translate kinect drag actions into onscreen pixels
     destroy_thresh = 500 # Distance threshold for destroying a window
 
     def __init__(self, wind):
@@ -148,7 +150,7 @@ class Mouse(object):
                     dx, dy = pr[0] - self.dual_anchor[0], pr[1] - self.dual_anchor[1]
                     self.dual_anchor = (int(self.dual_anchor[0] + dx / self.drag_speed), int(self.dual_anchor[1] + dy / self.drag_speed))
                     x, y = self.wind.position(self.active_window)
-                    self.wind.move(self.active_window, (x + self.drag_scale * dx, y + self.drag_scale * dy))
+                    self.wind.move(self.active_window, (x + self.drag_scale[0] * dx, y + self.drag_scale[1] * dy))
             elif self.dual_mode == 'scroll': # Scrolling
                 diff = pr[1] - self.dual_anchor[1]
                 if math.fabs(diff) > self.scroll_thresh:
@@ -274,10 +276,8 @@ if __name__ == '__main__':
     wind = Window()
     mouse = Mouse(wind)
 
-    title = "qazwsxedcrfvtgbyhnuj"
-    cv.NamedWindow(title)
+    cv.NamedWindow(wind.title)
     small = cv.CreateImage((320, 240), 8, 3)
-    window = None
     active = True
     inputs = 1
 
@@ -350,12 +350,13 @@ if __name__ == '__main__':
             cv.Rectangle(video, (x, y), (x + w, y + h), blue)
 
             cv.Resize(video, small)
-            cv.ShowImage(title, small)
+            cv.ShowImage(wind.title, small)
 
-            if window == None:
-                window = wind.find_window(title)
+            if not wind.video:
+                window = wind.find_window(wind.title)
                 if window:
                     wind.move(window, (mouse.sys_dim[0] - 320, 0))
+                    wind.video = window
 
         k = cv.WaitKey(10)
         if k == 32:
