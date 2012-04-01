@@ -103,12 +103,12 @@ class Mouse(object):
     click_thresh = 160 # Width threshold for clicking
 
     scroll_thresh = 35 # Height threshold for scrolling
-    scroll_speed = 7.0 # Inverse of rate at which scroll anchor catches up
+    scroll_speed = 0.001 # Inverse of rate at which scroll anchor catches up
 
-    grab_thresh = 300 # Distance threshold for grabbing a window
+    grab_thresh = 270 # Distance threshold for grabbing a window
     drag_thresh = 30 # Distance threshold for dragging a window around
-    drag_speed = 12.0 # Inverse of rate at which drag anchor catches up
-    drag_scale = (0.4, 0.2) # Scale to translate kinect drag actions into onscreen pixels
+    drag_speed = 25.0 # Inverse of rate at which drag anchor catches up
+    drag_scale = (0.2, 0.2) # Scale to translate kinect drag actions into onscreen pixels
     destroy_thresh = 500 # Distance threshold for destroying a window
 
     def __init__(self, wind):
@@ -158,7 +158,7 @@ class Mouse(object):
             elif self.dual_mode == 'scroll': # Scrolling
                 diff = pr[1] - self.dual_anchor[1]
                 if math.fabs(diff) > self.scroll_thresh:
-                    self.dual_anchor = (self.dual_anchor[0], int(self.dual_anchor[1] + diff / self.scroll_speed))
+                    self.dual_anchor = (self.dual_anchor[0], int(self.dual_anchor[1] + 1 / (diff * self.scroll_speed)))
                     if diff < 0:
                         self.click(4)
                     else:
@@ -270,7 +270,7 @@ class Smoother(object):
 blue = cv.RGB(17, 110, 255)
 
 def draw_point(video, p):
-    cv.Rectangle(video, p, (p[0] + 5, p[1] + 5) ,blue)
+    cv.Circle(video, p, 10 ,blue)
 
 if __name__ == '__main__':
     kin = Kinect()
@@ -294,7 +294,7 @@ if __name__ == '__main__':
             if contour:
                 _, _, w, _ = cv.BoundingRect(contour)
                 if w > Kinect.dim[0] / 2:
-                    cv.WaitKey(1000)
+                    cv.WaitKey(500)
                     mouse.mousedown = True
                     active = True
         else:
@@ -315,14 +315,16 @@ if __name__ == '__main__':
                     anchor = mouse.anchor
                     if anchor:
                         draw_point(video, anchor)
-                        cv.Line(video, (anchor[0] + 2, anchor[1] + 2), (x + 2, y + 2), blue)
+                        cv.Line(video, anchor, (x, y), blue)
                     draw_point(video, (x, y))
                     draw_point(video, (lh[0], y))
                     draw_point(video, (rh[0], y))
 
                     _, _, _, h = cv.BoundingRect(contour)
-                    if h > Kinect.dim[1] * 5 / 6:
+                    if h > Kinect.dim[1] * 5 / 6 and tip[0] < Kinect.dim[0] / 5:
                         active = False
+                        mouse.x, mouse.y = mouse.sys_dim[0] / 2, mouse.sys_dim[1] / 2
+                        mouse.reposition()
 
                 else: # Multiple input
                     tips = (kin.compute_tip(list(contour)), kin.compute_tip(list(contour.h_next())))
@@ -345,7 +347,7 @@ if __name__ == '__main__':
                     anchor = mouse.dual_anchor
                     if anchor:
                         draw_point(video, anchor)
-                        cv.Line(video, (anchor[0] + 2, anchor[1] + 2), (pr[0] + 2, pr[1] + 2), blue)
+                        cv.Line(video, anchor, pr, blue)
                     draw_point(video, tipl)
                     draw_point(video, tipr)
 
