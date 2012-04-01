@@ -56,7 +56,7 @@ class Window(object):
     def __init__(self):
         self.display = Display()
         self.root = self.display.screen().root
-        self.title = 'Pointer mode'
+        self.title = 'qazwsxedcrfvtgbyhnuj'
         self.video = None
 
     def active_window(self):
@@ -78,6 +78,7 @@ class Window(object):
 
     def move(self, window, pos):
         window.configure(x = pos[0], y = pos[1])
+        window.set_wm_name('help')
         self.display.sync()
 
     def destroy(self, window):
@@ -105,7 +106,7 @@ class Mouse(object):
     scroll_speed = 7.0 # Inverse of rate at which scroll anchor catches up
 
     grab_thresh = 300 # Distance threshold for grabbing a window
-    drag_thresh = 40 # Distance threshold for dragging a window around
+    drag_thresh = 30 # Distance threshold for dragging a window around
     drag_speed = 12.0 # Inverse of rate at which drag anchor catches up
     drag_scale = (0.4, 0.2) # Scale to translate kinect drag actions into onscreen pixels
     destroy_thresh = 500 # Distance threshold for destroying a window
@@ -137,11 +138,14 @@ class Mouse(object):
             self.active_window = self.wind.active_window()
             self.dual_anchor = pr
 
-            if self.wind.shape(self.active_window)[0] != self.sys_dim[0]: # Skip maximized windows windows
+            if self.wind.shape(self.active_window)[0] != self.sys_dim[0]: # Skip maximized windows
                 if self.dist(pl, pr) < self.grab_thresh: # Grab the window if the points are close enough
                     self.dual_mode = 'move'
+                else:
+                    self.x, self.y = self.clickx, self.clicky # Center scrolling on the last clicked spot
+                    self.reposition()
             else: # Scrolling
-                self.x, self.y = self.clickx, self.clicky # Center scrolling on the last clicked spot
+                self.x, self.y = self.clickx, self.clicky
                 self.reposition()
         else:
             if self.dual_mode == 'move': # Window operations
