@@ -57,6 +57,10 @@ class Window(object):
         self.display = Display()
         self.root = self.display.screen().root
 
+    def refresh(self):
+        self.display = Display()
+        self.root = self.display.screen().root
+
     def active_window(self):
         window_id = self.root.get_full_property(self.display.intern_atom('_NET_ACTIVE_WINDOW'), X.AnyPropertyType).value[0]
         window = self.display.create_resource_object('window', window_id)
@@ -77,6 +81,11 @@ class Window(object):
     def move(self, window, pos):
         window.configure(x = pos[0], y = pos[1])
         self.display.sync()
+
+    def destroy(self, window):
+        window.destroy
+        self.display.sync()
+        self.refresh()
 
     def shape(self, window):
         geo = window.get_geometry()
@@ -102,12 +111,14 @@ class Mouse(object):
     drag_thresh = 40 # Distance threshold for dragging a window around
     drag_speed = 12.0 # Inverse of rate at which drag anchor catches up
     drag_scale = 0.4 # Scale to translate kinect drag actions into onscreen pixels
+    destroy_thresh = 500 # Distance threshold for destroying a window
 
     def __init__(self, wind):
         self.anchor = None
         self.dual_anchor = None
         self.mousedown = False
         self.active_window = None
+        self.dual_mode = 'scroll'
 
         self.x = 0
         self.y = 0
@@ -125,24 +136,24 @@ class Mouse(object):
         self.mousedown = True
 
         if self.dual_anchor == None:
-            d = self.dist(pl, pr)
-            active_window = wind.active_window()
+            self.destroyable = self.dist(pl, pr) < self.destroy_thresh * 2 / 3 # Make gesture destroy difficult; must drag and expand
+            self.active_window = self.wind.active_window()
             self.dual_anchor = pr
-            if d < self.grab_thresh and wind.shape(active_window)[0] != self.sys_dim[0]: # Window operations
-                self.active_window = active_window
+            if self.wind.shape(self.active_window)[0] != self.sys_dim[0]: # Skip maximized windows windows
+                if self.dist(pl, pr) < self.grab_thresh: # Movement
+                    self.dual_mode = 'move'
             else: # Scrolling
-                self.dual_anchor = pr
                 self.x, self.y = self.clickx, self.clicky # Center scrolling on the last clicked spot
                 self.reposition()
         else:
-            if self.active_window: # Window operations
+            if self.dual_mode == 'move': # Window operations
                 d = self.dist(self.dual_anchor, pr)
                 if d > self.drag_thresh:
                     dx, dy = pr[0] - self.dual_anchor[0], pr[1] - self.dual_anchor[1]
                     self.dual_anchor = (int(self.dual_anchor[0] + dx / self.drag_speed), int(self.dual_anchor[1] + dy / self.drag_speed))
                     x, y = self.wind.position(self.active_window)
                     self.wind.move(self.active_window, (x + self.drag_scale * dx, y + self.drag_scale * dy))
-            else: # Scrolling
+            elif self.dual_mode == 'scroll': # Scrolling
                 diff = pr[1] - self.dual_anchor[1]
                 if math.fabs(diff) > self.scroll_thresh:
                     self.dual_anchor = (self.dual_anchor[0], int(self.dual_anchor[1] + diff / self.scroll_speed))
@@ -151,10 +162,14 @@ class Mouse(object):
                     else:
                         self.click(5)
 
+        if self.destroyable and self.dist(pl, pr) > self.destroy_thresh:
+            self.active_window = self.wind.active_window()
+            self.destroyable = False
 
     def process(self, point, w):
         self.dual_anchor = None
         self.active_window = None
+        self.dual_mode = 'scroll'
 
         if w > self.click_thresh:
             if not self.mousedown:
