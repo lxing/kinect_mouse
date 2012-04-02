@@ -73,8 +73,11 @@ class Window(object):
         return None
 
     def resize(self, window, dim):
+        a = self.shape(window)
         window.configure(width = dim[0], height = dim[1])
         self.display.sync()
+        s = self.shape(window)
+        print a, s
 
     def move(self, window, pos):
         window.configure(x = pos[0], y = pos[1])
@@ -102,18 +105,22 @@ class Mouse(object):
     anchor_speed = 3.0 # Anchored move zoom scale
     click_thresh = 160 # Width threshold for clicking
 
-    scroll_thresh = 35 # Height threshold for scrolling
+    scroll_thresh = 30 # Height threshold for scrolling
     scroll_speed = 0.001 # Inverse of rate at which scroll anchor catches up
 
     grab_thresh = 270 # Distance threshold for grabbing a window
     drag_thresh = 30 # Distance threshold for dragging a window around
-    drag_speed = 25.0 # Inverse of rate at which drag anchor catches up
-    drag_scale = (0.2, 0.2) # Scale to translate kinect drag actions into onscreen pixels
+    drag_speed = 15.0 # Inverse of rate at which drag anchor catches up
+    drag_scale = (0.4, 0.4) # Scale to translate kinect drag actions into onscreen pixels
     destroy_thresh = 500 # Distance threshold for destroying a window
+
+    resize_thresh = 70
+    resize_scale = 1.3
 
     def __init__(self, wind):
         self.anchor = None
         self.dual_anchor = None
+        self.size_anchor = None
         self.mousedown = False
         self.active_window = None
         self.dual_mode = 'scroll'
@@ -133,6 +140,9 @@ class Mouse(object):
         self.anchor = None
         self.mousedown = True
 
+        h = pr[1] - pl[1]
+        avg = ((pr[0] + pl[0]) / 2, (pr[1] + pl[1]) / 2)
+
         if self.dual_anchor == None:
             self.destroyable = self.dist(pl, pr) < self.destroy_thresh * 2 / 3 # Make gesture destroy difficult; must drag and expand
             self.active_window = self.wind.active_window()
@@ -140,7 +150,9 @@ class Mouse(object):
 
             if self.wind.shape(self.active_window)[0] != self.sys_dim[0]: # Skip maximized windows
                 if self.dist(pl, pr) < self.grab_thresh: # Grab the window if the points are close enough
+                    self.dual_anchor = avg
                     self.dual_mode = 'move'
+                    self.size_anchor = h
                 else:
                     self.x, self.y = self.clickx, self.clicky # Center scrolling on the last clicked spot
                     self.reposition()
@@ -149,12 +161,26 @@ class Mouse(object):
                 self.reposition()
         else:
             if self.dual_mode == 'move': # Window operations
-                d = self.dist(self.dual_anchor, pr)
+                d = self.dist(self.dual_anchor, avg)
                 if d > self.drag_thresh:
                     dx, dy = pr[0] - self.dual_anchor[0], pr[1] - self.dual_anchor[1]
                     self.dual_anchor = (int(self.dual_anchor[0] + dx / self.drag_speed), int(self.dual_anchor[1] + dy / self.drag_speed))
                     x, y = self.wind.position(self.active_window)
                     self.wind.move(self.active_window, (x + self.drag_scale[0] * dx, y + self.drag_scale[1] * dy))
+
+                resize = h - self.size_anchor
+                if math.fabs(resize) > self.resize_thresh:
+                    shape = self.wind.shape(self.active_window)
+                    if resize > 0:
+                        shape = (
+                            min(shape[0] * self.resize_scale, self.sys_dim[0] * 8 / 9),
+                            min(shape[1] * self.resize_scale, self.sys_dim[1] * 8 / 9))
+                    else:
+                        shape = (
+                            max(shape[0] / self.resize_scale, self.sys_dim[0] / 6),
+                            max(shape[1] / self.resize_scale, self.sys_dim[1] / 4))
+                    self.wind.resize(self.active_window, shape)
+                    self.size_anchor = h
             elif self.dual_mode == 'scroll': # Scrolling
                 diff = pr[1] - self.dual_anchor[1]
                 if math.fabs(diff) > self.scroll_thresh:
