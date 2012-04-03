@@ -56,8 +56,7 @@ class Window(object):
     def __init__(self):
         self.display = Display()
         self.root = self.display.screen().root
-        self.title = 'qazwsxedcrfvtgbyhnuj'
-        self.video = None
+        self.title = 'Pointer active'
 
     def active_window(self):
         window_id = self.root.get_full_property(self.display.intern_atom('_NET_ACTIVE_WINDOW'), X.AnyPropertyType).value[0]
@@ -73,15 +72,11 @@ class Window(object):
         return None
 
     def resize(self, window, dim):
-        a = self.shape(window)
         window.configure(width = dim[0], height = dim[1])
         self.display.sync()
-        s = self.shape(window)
-        print a, s
 
     def move(self, window, pos):
         window.configure(x = pos[0], y = pos[1])
-        window.set_wm_name('help')
         self.display.sync()
 
     def destroy(self, window):
@@ -96,6 +91,11 @@ class Window(object):
         p = window.query_pointer()
         return (p.root_x - p.win_x, p.root_y - p.win_y - 28) # The 28 seems to be the taskbar
 
+    def rename(self, window):
+        print 'renaming', window.get_wm_name()
+        window.set_wm_icon_name('poo')
+        window.set_wm_name('poo')
+        self.display.sync()
 
 class Mouse(object):
     kin_base = (180, 20) # U-right corner of the detection window
@@ -108,14 +108,13 @@ class Mouse(object):
     scroll_thresh = 30 # Height threshold for scrolling
     scroll_speed = 0.001 # Inverse of rate at which scroll anchor catches up
 
-    grab_thresh = 270 # Distance threshold for grabbing a window
     drag_thresh = 30 # Distance threshold for dragging a window around
-    drag_speed = 15.0 # Inverse of rate at which drag anchor catches up
-    drag_scale = (0.4, 0.4) # Scale to translate kinect drag actions into onscreen pixels
+    drag_speed = 5.0 # Inverse of rate at which drag anchor catches up
+    drag_scale = (0.6, 0.6) # Scale to translate kinect drag actions into onscreen pixels
     destroy_thresh = 500 # Distance threshold for destroying a window
 
-    resize_thresh = 70
-    resize_scale = 1.3
+    resize_thresh = 50
+    resize_scale = 1.2
 
     def __init__(self, wind):
         self.anchor = None
@@ -123,7 +122,7 @@ class Mouse(object):
         self.size_anchor = None
         self.mousedown = False
         self.active_window = None
-        self.dual_mode = 'scroll'
+        self.dual_mode = None
 
         self.x = 0
         self.y = 0
@@ -140,47 +139,40 @@ class Mouse(object):
         self.anchor = None
         self.mousedown = True
 
-        h = pr[1] - pl[1]
-        avg = ((pr[0] + pl[0]) / 2, (pr[1] + pl[1]) / 2)
-
         if self.dual_anchor == None:
             self.destroyable = self.dist(pl, pr) < self.destroy_thresh * 2 / 3 # Make gesture destroy difficult; must drag and expand
             self.active_window = self.wind.active_window()
             self.dual_anchor = pr
+            #self.wind.rename(self.active_window)
 
-            if self.wind.shape(self.active_window)[0] != self.sys_dim[0]: # Skip maximized windows
-                if self.dist(pl, pr) < self.grab_thresh: # Grab the window if the points are close enough
-                    self.dual_anchor = avg
-                    self.dual_mode = 'move'
-                    self.size_anchor = h
-                else:
-                    self.x, self.y = self.clickx, self.clicky # Center scrolling on the last clicked spot
-                    self.reposition()
+            if pl[1] < Kinect.dim[1] * 2 / 3 and self.wind.shape(self.active_window)[0] != self.sys_dim[0]:
+                self.dual_mode = 'move'
+                self.size_anchor = pl[1]
             else: # Scrolling
-                self.x, self.y = self.clickx, self.clicky
-                self.reposition()
+                self.dual_mode = 'scroll'
+                self.reposition((self.clickx, self.clicky))
         else:
             if self.dual_mode == 'move': # Window operations
-                d = self.dist(self.dual_anchor, avg)
+                d = self.dist(self.dual_anchor, pr)
                 if d > self.drag_thresh:
                     dx, dy = pr[0] - self.dual_anchor[0], pr[1] - self.dual_anchor[1]
                     self.dual_anchor = (int(self.dual_anchor[0] + dx / self.drag_speed), int(self.dual_anchor[1] + dy / self.drag_speed))
                     x, y = self.wind.position(self.active_window)
                     self.wind.move(self.active_window, (x + self.drag_scale[0] * dx, y + self.drag_scale[1] * dy))
 
-                resize = h - self.size_anchor
+                resize = pl[1] - self.size_anchor
                 if math.fabs(resize) > self.resize_thresh:
                     shape = self.wind.shape(self.active_window)
                     if resize > 0:
                         shape = (
-                            min(shape[0] * self.resize_scale, self.sys_dim[0] * 8 / 9),
-                            min(shape[1] * self.resize_scale, self.sys_dim[1] * 8 / 9))
+                            min(shape[0] * self.resize_scale, self.sys_dim[0] * 15 / 16),
+                            min(shape[1] * self.resize_scale, self.sys_dim[1] * 7 / 8))
                     else:
                         shape = (
-                            max(shape[0] / self.resize_scale, self.sys_dim[0] / 6),
+                            max(shape[0] / self.resize_scale, self.sys_dim[0] / 10),
                             max(shape[1] / self.resize_scale, self.sys_dim[1] / 4))
                     self.wind.resize(self.active_window, shape)
-                    self.size_anchor = h
+                    self.size_anchor = pl[1]
             elif self.dual_mode == 'scroll': # Scrolling
                 diff = pr[1] - self.dual_anchor[1]
                 if math.fabs(diff) > self.scroll_thresh:
@@ -198,9 +190,8 @@ class Mouse(object):
             cv.WaitKey(500)
 
     def process(self, point, w):
-        self.dual_anchor = None
-        self.active_window = None
-        self.dual_mode = 'scroll'
+        if self.dual_anchor:
+            self.dual_anchor = None
 
         if w > self.click_thresh:
             if not self.mousedown:
@@ -229,7 +220,9 @@ class Mouse(object):
         self.y = (y - self.kin_base[1]) / float(self.kin_dim[1]) * self.sys_dim[1]
         self.reposition()
 
-    def reposition(self):
+    def reposition(self, p = None):
+        if p:
+            self.x, self.y = p
         fake_input(self.wind.display, X.MotionNotify, x=self.x, y=self.y)
         self.wind.display.sync()
 
@@ -349,8 +342,7 @@ if __name__ == '__main__':
                     _, _, _, h = cv.BoundingRect(contour)
                     if h > Kinect.dim[1] * 5 / 6 and tip[0] < Kinect.dim[0] / 5:
                         active = False
-                        mouse.x, mouse.y = mouse.sys_dim[0] / 2, mouse.sys_dim[1] / 2
-                        mouse.reposition()
+                        mouse.reposition((mouse.sys_dim[0] / 2, mouse.sys_dim[1] / 2))
 
                 else: # Multiple input
                     tips = (kin.compute_tip(list(contour)), kin.compute_tip(list(contour.h_next())))
@@ -383,12 +375,6 @@ if __name__ == '__main__':
 
             cv.Resize(video, small)
             cv.ShowImage(wind.title, small)
-
-            if not wind.video:
-                window = wind.find_window(wind.title)
-                if window:
-                    wind.move(window, (mouse.sys_dim[0] - 320, 0))
-                    wind.video = window
 
         k = cv.WaitKey(10)
         if k == 32:
